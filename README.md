@@ -2,7 +2,7 @@
 
 a test version
 
-only use in this README directory
+only used in this README directory
 
 ```shell
 # in zsh

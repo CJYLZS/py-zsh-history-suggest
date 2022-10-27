@@ -1,5 +1,3 @@
-from multiprocessing import current_process
-import os
 import re
 import sys
 import tty
@@ -129,9 +127,19 @@ async def async_main():
 def sync_main():
     with open('/dev/tty', 'r') as fdr, open('/dev/tty', 'w') as fdw:
         tty.setcbreak(fdr)
+        modify = False
         while 1:
             x = fdr.read(1)
             ordx = ord(x)
+            if ordx == 27:
+                modify = True
+                continue
+            if modify:
+                modify = False
+                if ordx in _handle_dict[27]:
+                    _handle_dict[27][ordx]()
+                continue
+
             if ordx in _handle_dict:
                 x = _handle_dict[ordx]()
             else:
