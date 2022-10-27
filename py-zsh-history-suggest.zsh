@@ -1,7 +1,7 @@
 
 
 function test(){
-    BUFFER=$(LINES=${LINES} COLUMNS=${COLUMNS} `which python3` main.py)
+    BUFFER=$(LINES=${LINES} COLUMNS=${COLUMNS} /usr/bin/suggest)
     CURSOR=$#BUFFER
     zle -R -c
 }

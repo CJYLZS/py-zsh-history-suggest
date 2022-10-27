@@ -1,0 +1,235 @@
+#!/usr/bin/python3
+
+
+import os
+import re
+import sys
+import tty
+
+
+class Record:
+    def __init__(self, timestamp, ret, cmd) -> None:
+        self.__timestamp = timestamp
+        self.__ret = ret
+        self.__cmd = str(cmd).strip('\n')
+
+    @property
+    def timestamp(self):
+        return self.__timestamp
+
+    @property
+    def ret(self):
+        return self.__ret
+
+    @property
+    def cmd(self):
+        return self.__cmd
+
+    @cmd.setter
+    def cmd(self, value):
+        self.__cmd = str(value).strip('\n')
+
+    def __repr__(self) -> str:
+        return f': {self.__timestamp}:{self.ret}; {self.__cmd}'
+
+    def __hash__(self) -> int:
+        return hash(self.__cmd)
+
+    def __eq__(self, __o) -> bool:
+        return self.__cmd == __o.cmd
+
+
+class History_Suggest:
+    def write_history(self, file, record_list):
+        r_list = sorted(record_list, key=lambda key: key.timestamp)
+        with open(file, 'w', encoding='utf-8') as f:
+            for r in r_list:
+                f.write(f'{r}')
+        return len(r_list)
+
+    def read_history(self, file, uniq=True):
+        r_list = []
+        with open(file, 'r', errors='ignore') as f:
+            while True:
+                line = f.readline()
+                if not line:
+                    break
+                if not line.startswith(':'):
+                    r_list[-1].cmd += line
+                    continue
+                d, *cmd = line[2:].split(';')
+                timestamp, ret = d.split(':')
+                timestamp = int(timestamp)
+                ret = int(ret)
+                cmd = (';'.join(cmd))
+                r_list.append(Record(timestamp, ret, cmd))
+        if uniq:
+            return list(set(r_list))
+        return r_list
+
+    def __init__(self, history_file='~/.zsh_history'):
+        self.__history_file = os.path.expanduser(history_file)
+        assert os.path.exists(
+            self.__history_file), f'{self.__history_file} not exists'
+        self.__history_list = self.read_history(self.__history_file)
+
+    def get_suggest(self, _str, count=10):
+        res = set()
+        for record in reversed(self.__history_list):
+            if _str[0] == record.cmd[0] and _str in record.cmd:
+                res.add(record.cmd.replace(_str, f'\033[32m{_str}\033[0m'))
+            if len(res) >= count:
+                return list(res)
+        return list(res)
+
+
+def get_terminal_size():
+    try:
+        return int(os.environ["LINES"]), int(os.environ["COLUMNS"])
+    except:
+        tmp = os.get_terminal_size()
+        return tmp.lines, tmp.columns
+
+
+def get_cursor_pos():
+    # x: line_index
+    # y: column_index
+    '''
+        echo -ne '\u001b[6n' > /dev/tty
+        read -t 1 -s -d 'R' pos < /dev/tty
+        pos="${pos##*\[}"
+        row="$(( ${pos%;*} -1 ))"
+        col="$(( ${pos#*;} -1 ))"
+        echo $row $col
+    '''
+    with open('/dev/tty', 'w') as f:
+        f.write('\u001b[6n')
+    with open('/dev/tty', 'r') as f:
+        tty.setcbreak(f)
+        tmp = ''
+        while True:
+            x = f.read(1)
+            if x == 'R':
+                break
+            tmp += x
+    x, y = tmp[2:].split(';')
+    return int(x), int(y)
+
+
+class ZSH_History_Suggest:
+
+    __BACKSPACE = '\b \b'
+    __MODIFY = 27  # escape
+
+    def __init__(self) -> None:
+        self.__buffer = []
+        self.__suggestion_list = []
+        self.__suggestion_idx = 0
+        self.__cursor_x, _ = get_cursor_pos()
+        self.__terminal_lines, self.__terminal_cols = get_terminal_size()
+        self.__left_lines = self.__terminal_lines - self.__cursor_x
+        self.__hs = History_Suggest()
+        self.__handle_dict = {
+            127: self.__handle_backspace,
+            10: self.__handle_select,
+            self.__MODIFY: {
+                106: self.__handle_suggestion_down,
+                107: self.__handle_suggestion_up
+            }
+        }
+
+    def __handle_backspace(self):
+        if len(self.__buffer) > 0:
+            self.__buffer.pop()
+            return self.__BACKSPACE
+        return ''
+
+    def __handle_select(self):
+        # Regex for ANSI colour codes
+        ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+        if self.__suggestion_idx == len(self.__suggestion_list):
+            sys.stdout.write(''.join(self.__buffer))
+        else:
+            sys.stdout.write(
+                re.sub(ANSI_RE, "", self.__suggestion_list[self.__suggestion_idx]))
+        return "".join([self.__BACKSPACE for _ in range(len(self.__buffer))])
+
+    def __indicate(self):
+        _str = '\n ' * (len(self.__suggestion_list))
+        sys.stderr.write(f"\033[s{_str}\033[u")
+        if self.__suggestion_idx == len(self.__suggestion_list):
+            return
+        _str = '\n' * (self.__suggestion_idx + 1) + "\033[1;32m>\033[0m"
+        sys.stderr.write(f"\033[s{_str}\033[u")
+
+    def __handle_suggestion_down(self):
+        self.__suggestion_idx += 1
+        self.__suggestion_idx %= len(self.__suggestion_list) + 1
+        self.__indicate()
+
+    def __handle_suggestion_up(self):
+        self.__suggestion_idx -= 1
+        if self.__suggestion_idx < 0:
+            self.__suggestion_idx = len(self.__suggestion_list)
+        self.__indicate()
+
+    def __clear_suggestions(self):
+        _str = "\n".join(
+            " " * self.__terminal_cols for _ in range(self.__left_lines))
+        sys.stderr.write(f"\033[s\n{_str}\033[u")
+
+    def __callback(self):
+        # sys.stderr.write(f'\033[s\n{"".join(buffer)}\033[u')
+        self.__clear_suggestions()
+        if len(self.__buffer) == 0:
+            return
+        res = self.__hs.get_suggest(''.join(self.__buffer), self.__left_lines)
+        self.__suggestion_list = res
+        self.__suggestion_idx = len(self.__suggestion_list)
+        _str_res = '\n  '.join(res)[:-1]
+        sys.stderr.write(f"\033[s\n  {_str_res}\033[u")
+
+    def __sync_main(self):
+        with open('/dev/tty', 'r') as fdr, open('/dev/tty', 'w') as fdw:
+            tty.setcbreak(fdr)
+            modify = False
+            while 1:
+                x = fdr.read(1)
+                ordx = ord(x)
+                if ordx == self.__MODIFY:
+                    modify = True
+                    continue
+                if modify:
+                    modify = False
+                    if ordx in self.__handle_dict[self.__MODIFY]:
+                        self.__handle_dict[self.__MODIFY][ordx]()
+                        continue
+
+                if ordx in self.__handle_dict:
+                    x = self.__handle_dict[ordx]()
+                else:
+                    self.__buffer.append(x)
+                fdw.write(x)
+                fdw.flush()
+                if ordx == 10:
+                    break
+                self.__callback()
+        self.__clear_suggestions()
+        return 0
+
+    def __clear_all(self):
+        self.__clear_suggestions()
+        with open('/dev/tty', 'w') as f:
+            f.write(''.join(self.__BACKSPACE for _ in range(len(self.__buffer))))
+
+    def run(self):
+        ret = 0
+        try:
+            self.__sync_main()
+        except KeyboardInterrupt:
+            self.__clear_all()
+        return ret
+
+
+if __name__ == '__main__':
+    sys.exit(ZSH_History_Suggest().run())
