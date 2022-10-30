@@ -5,6 +5,12 @@ import os
 import re
 import sys
 import tty
+try:
+    from cjutils.logger import *
+    get_logger(filename='test.log',
+               overwriteDefaultLogger=True, level=logging.DEBUG)
+except:
+    pass
 
 
 class Record:
@@ -67,20 +73,43 @@ class History_Suggest:
             return list(set(r_list))
         return r_list
 
-    def __init__(self, history_file='~/.zsh_history'):
+    def __init__(self, history_file='.zsh_history'):
         self.__history_file = os.path.expanduser(history_file)
         assert os.path.exists(
             self.__history_file), f'{self.__history_file} not exists'
         self.__history_list = self.read_history(self.__history_file)
 
-    def get_suggest(self, _str, count=10):
+    def get_suggest(self, _str: str, count=10):
         res = set()
+        words = _str.split()
+        if len(words) == 0:
+            return []
         for record in reversed(self.__history_list):
-            if _str[0] == record.cmd[0] and _str in record.cmd:
-                res.add(record.cmd.replace(_str, f'\033[32m{_str}\033[0m'))
-            if len(res) >= count:
-                return list(res)
-        return list(res)
+            # if _str[0] == record.cmd[0] or _str in record.cmd:
+            #     res.add(record.cmd.replace(_str, f'\033[32m{_str}\033[0m'))
+            flag = True
+            highlighted_str = record.cmd
+            for word in words:
+                if not word in record.cmd:
+                    flag = False
+                    break
+                highlighted_str = highlighted_str.replace(
+                    word, f'\033[32m{word}\033[0m')
+            if flag:
+                res.add((record.cmd, highlighted_str))
+
+        def cmp(key: tuple):
+            key = key[0]
+            _sum = 0
+            for idx, word in enumerate(words):
+                try:
+                    _sum += (len(words) - idx) * 2 + key.index(word)
+                except Exception as e:
+                    assert word in key
+                    print(word, key)
+                    raise e
+            return _sum
+        return [r[1] for r in sorted(list(res), key=cmp)[:count]]
 
 
 def get_terminal_size():
@@ -120,6 +149,7 @@ class ZSH_History_Suggest:
 
     __BACKSPACE = '\b \b'
     __MODIFY = 27  # escape
+    __ENTER = 10
 
     def __init__(self) -> None:
         self.__buffer = []
@@ -178,7 +208,7 @@ class ZSH_History_Suggest:
             " " * self.__terminal_cols for _ in range(self.__left_lines))
         sys.stderr.write(f"\033[s\n{_str}\033[u")
 
-    def __callback(self):
+    def __suggest(self):
         # sys.stderr.write(f'\033[s\n{"".join(buffer)}\033[u')
         self.__clear_suggestions()
         if len(self.__buffer) == 0:
@@ -189,31 +219,39 @@ class ZSH_History_Suggest:
         _str_res = '\n  '.join(res)[:-1]
         sys.stderr.write(f"\033[s\n  {_str_res}\033[u")
 
+    def __init_buffer(self):
+        if 'BUFFER' in os.environ:
+            self.__buffer = list(os.environ['BUFFER'])
+
+    def __main_loop(self, fdr, fdw):
+        modify = False
+        while True:
+            x = fdr.read(1)
+            ordx = ord(x)
+            if ordx == self.__MODIFY:
+                modify = True
+                continue
+            if modify:
+                modify = False
+                if ordx in self.__handle_dict[self.__MODIFY]:
+                    self.__handle_dict[self.__MODIFY][ordx]()
+                    continue
+            if ordx in self.__handle_dict:
+                x = self.__handle_dict[ordx]()
+            else:
+                self.__buffer.append(x)
+            fdw.write(x)
+            fdw.flush()
+            if ordx == self.__ENTER:
+                break
+            self.__suggest()
+
     def __sync_main(self):
+        self.__init_buffer()
+        self.__suggest()
         with open('/dev/tty', 'r') as fdr, open('/dev/tty', 'w') as fdw:
             tty.setcbreak(fdr)
-            modify = False
-            while 1:
-                x = fdr.read(1)
-                ordx = ord(x)
-                if ordx == self.__MODIFY:
-                    modify = True
-                    continue
-                if modify:
-                    modify = False
-                    if ordx in self.__handle_dict[self.__MODIFY]:
-                        self.__handle_dict[self.__MODIFY][ordx]()
-                        continue
-
-                if ordx in self.__handle_dict:
-                    x = self.__handle_dict[ordx]()
-                else:
-                    self.__buffer.append(x)
-                fdw.write(x)
-                fdw.flush()
-                if ordx == 10:
-                    break
-                self.__callback()
+            self.__main_loop(fdr, fdw)
         self.__clear_suggestions()
         return 0
 
