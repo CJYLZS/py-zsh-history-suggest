@@ -1,6 +1,6 @@
 pushd
 cd $(dirname $0)
-if [ ! -f /usr/bin/suggest]; then
+if [ ! -f /usr/bin/suggest ]; then
     sudo ln -s $(pwd)/suggest /usr/bin/suggest
 fi
 popd
