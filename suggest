@@ -73,7 +73,7 @@ class History_Suggest:
             return list(set(r_list))
         return r_list
 
-    def __init__(self, history_file='.zsh_history'):
+    def __init__(self, history_file='~/.zsh_history'):
         self.__history_file = os.path.expanduser(history_file)
         assert os.path.exists(
             self.__history_file), f'{self.__history_file} not exists'
